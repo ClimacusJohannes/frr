@@ -1,4 +1,5 @@
 use clap::Parser;
+use find_and_replace::find_and_replace;
 use iced::alignment::Horizontal::Left;
 use iced::widget::button::secondary;
 use iced::widget::container::bordered_box;
@@ -7,8 +8,15 @@ use iced::widget::{
 };
 use iced::Length::Fill;
 use iced::Size;
+use log::info;
 use rfd::FileDialog;
-use std::fs;
+use std::fs::{self, DirEntry};
+use std::io::{BufRead, BufReader, BufWriter, Write};
+
+mod dir_crawl;
+mod find_and_replace;
+
+use dir_crawl::dir_crawl;
 
 #[derive(Default)]
 struct State {
@@ -17,6 +25,7 @@ struct State {
     path: String,
     text: String,
     confirm: bool,
+    file_list: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -26,8 +35,8 @@ enum Message {
     BrowsePath,
     UpdatePath((String, String)),
     ChangePath(String),
+    Find,
     Replace,
-    Confirm,
     Cancel,
 }
 
@@ -60,7 +69,11 @@ fn view(state: &State) -> Container<'_, Message> {
                             })
                             .on_submit(Message::Replace),
                         button("Browse")
-                            .on_press(Message::BrowsePath)
+                            .on_press_maybe(if !state.confirm {
+                                Some(Message::BrowsePath)
+                            } else {
+                                Option::None
+                            })
                             .width(80)
                             .height(35),
                     ]
@@ -80,10 +93,7 @@ fn view(state: &State) -> Container<'_, Message> {
                         .width(220)
                         .height(35)
                         .style(secondary),
-                    button("Find and replace")
-                        .on_press(Message::Replace)
-                        .width(220)
-                        .height(35),
+                    button("Find").on_press(Message::Find).width(220).height(35),
                 ]
                 .spacing(20),
             ]
@@ -100,9 +110,9 @@ fn view(state: &State) -> Container<'_, Message> {
             .style(bordered_box),
             // buttons for confirming or cancelling the operation
             row![
-                button("Confirm")
+                button("Replace")
                     .on_press_maybe(if state.confirm {
-                        Some(Message::Confirm)
+                        Some(Message::Replace)
                     } else {
                         Option::None
                     })
@@ -143,7 +153,7 @@ fn update(state: &mut State, message: Message) {
         }
 
         // event handling for the provisional replace results
-        Message::Replace => {
+        Message::Find => {
             if state.find.0 == "" || state.replace.0 == "" || state.path == "" {
                 state.text = "Please enter all three required parameters.".to_string();
                 return;
@@ -153,50 +163,57 @@ fn update(state: &mut State, message: Message) {
             }
             state.confirm = false;
             state.text = format!(
-                "Would you like to replace '{}' with '{}' in following files:\n\n-------------------------------------------------------------------",
+                "Would you like to replace '{}' with '{}' in following files:\n\n-------------------------------------------------------------------\n\n",
                     state.find.0, state.replace.0
             );
-            match find_and_replace(
-                &state.find.0,
-                &state.replace.0,
-                &state.path,
-                &mut state.text,
-                state.confirm,
-            ) {
-                Ok(text) => {
-                    state.text = format!("{}\n\nDo you wish to continue?", text);
-                    state.confirm = true;
+            match dir_crawl(&state.path) {
+                Ok(list) => {
+                    state.file_list = list.clone();
+                    let mut new_file_list: Vec<String> = vec![];
+                    for path in list {
+                        match find_and_replace::find(&state.find.0, &state.replace.0, &path) {
+                            Ok(text) => {
+                                if text != "" {
+                                    // add the path to the updated file list
+                                    new_file_list.push(path);
+                                    state.text = format!("{}{}\n\n", state.text, text);
+                                    state.text = format!("{}---------------------------------------------------------------------------------\n\n", state.text);
+                                }
+                                state.confirm = true;
+                            }
+                            Err(e) => {
+                                eprintln!("{:?}", e);
+                                state.text = format!("{} There was a problem: {}", state.text, e);
+                                state.confirm = false;
+                            }
+                        };
+                    }
+                    // update the file list
+                    state.file_list = new_file_list;
                 }
-                Err(e) => {
-                    eprintln!("{:?}", e);
-                    state.text = format!("Error: '{}' - {}", &state.path, e);
-                    state.confirm = true;
-                }
-            };
+                Err(e) => eprintln!("There was a problem searching for txt files: {}", e),
+            }
         }
 
         // event handling for the completion of the replace operation
-        Message::Confirm => {
+        Message::Replace => {
             state.text = format!(
-                "Success! Replaced '{}' with '{}' in the following files:\n\n-------------------------------------------------------------------",
+                "Success! Replaced '{}' with '{}' in the following files:\n\n",
                 state.find.0, state.replace.0
             )
             .to_string();
             state.find.1 = state.find.0.clone();
             state.replace.1 = state.replace.0.clone();
-            match find_and_replace(
-                &state.find.0,
-                &state.replace.0,
-                &state.path,
-                &mut state.text,
-                state.confirm,
-            ) {
-                Ok(text) => state.text = text,
-                Err(e) => {
-                    eprintln!("{:?}", e);
-                    state.text = format!("Error: '{}' - {}", &state.path, e);
-                }
-            };
+            for path in &state.file_list {
+                match find_and_replace(&state.find.0, &state.replace.0, path) {
+                    Ok(_) => state.text = format!("{}\n'{}'\n", state.text, path),
+
+                    Err(e) => {
+                        eprintln!("{:?}", e);
+                        state.text = format!("Error: {}", e);
+                    }
+                };
+            }
             state.confirm = false;
         }
         Message::Cancel => {
@@ -260,77 +277,4 @@ fn main() -> iced::Result {
             height: 1000.0,
         })
         .run()
-}
-
-fn find_and_replace(
-    find: &str,
-    replace_with: &str,
-    org_path: &str,
-    text: &mut String,
-    confirm: bool,
-) -> Result<String, std::io::Error> {
-    let paths = fs::read_dir(org_path)?;
-    let output_text = text;
-
-    for path in paths {
-        let path = path?;
-        let is_dir = &path.path().is_dir();
-
-        // if a directory, recursively call find_and_replace
-        if is_dir.to_owned() {
-            find_and_replace(
-                find,
-                replace_with,
-                &path.path().display().to_string(),
-                output_text,
-                confirm,
-            )?;
-        } else if path.path().display().to_string().contains(".txt") {
-            // add display_path to file in the output text
-            let display_path = &path.path().display().to_string();
-
-            // read file
-            let buffer = fs::read_to_string(&path.path())?;
-
-            if !buffer.contains(find) {
-                if !confirm {
-                    *output_text = format!("{}\n\nFile: {}\n\n", output_text, display_path);
-
-                    *output_text =
-                        format!("{}'{}' not found in file.\n\n", output_text, find).to_owned();
-                }
-                continue;
-            }
-
-            // change a string slice in the buffer
-            let new_buffer = buffer.replace(find, replace_with);
-
-            *output_text = format!("{}\n\nFile: {}\n\n", output_text, display_path);
-            // display lines with the replaced slice in the buffer
-            for (i, line) in buffer.lines().enumerate() {
-                if line.contains(find) {
-                    *output_text = format!("{}{}: {}\n", output_text, i + 1, line);
-                    *output_text = format!(
-                        "{}=> {}\n\n",
-                        output_text,
-                        new_buffer.lines().nth(i).unwrap()
-                    );
-                }
-            }
-
-            *output_text = format!(
-                "{}-------------------------------------------------------------------\n",
-                output_text
-            );
-
-            if confirm {
-                fs::write(&path.path(), new_buffer)?;
-            }
-        } else {
-            // in case of a non-txt file skip
-            continue;
-        }
-    }
-
-    Ok(output_text.to_owned())
 }
