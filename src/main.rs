@@ -1,14 +1,18 @@
 use clap::Parser;
 use find_and_replace::find_and_replace;
 use iced::alignment::Horizontal::Left;
+use iced::futures::never;
+use iced::futures::stream::Collect;
 use iced::widget::button::secondary;
 use iced::widget::container::bordered_box;
+use iced::widget::markdown::Url;
+use iced::widget::text::{Rich, Span};
+use iced::widget::text_editor::{Action, Content};
 use iced::widget::{
-    button, column, container, row, scrollable, text, text_input, Column, Container,
+    button, column, container, markdown, rich_text, row, scrollable, text, text_editor, text_input,
+    Column, Container, Scrollable, Text,
 };
-use iced::Length::Fill;
-use iced::Size;
-use log::info;
+use iced::{Element, Renderer, Size, Theme};
 use rfd::FileDialog;
 use std::fs::{self, DirEntry};
 use std::io::{BufRead, BufReader, BufWriter, Write};
@@ -18,14 +22,21 @@ mod find_and_replace;
 
 use dir_crawl::dir_crawl;
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct State {
     find: (String, String),
     replace: (String, String),
     path: String,
     text: String,
+    markdown: Vec<markdown::Item>,
     confirm: bool,
     file_list: Vec<String>,
+}
+
+impl State {
+    pub fn update_markdown(&mut self) {
+        self.markdown = markdown::parse(&self.text).collect();
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -38,6 +49,11 @@ enum Message {
     Find,
     Replace,
     Cancel,
+    Nothing,
+}
+
+fn do_nothing(action: Url) -> Message {
+    Message::Nothing
 }
 
 fn view(state: &State) -> Container<'_, Message> {
@@ -99,14 +115,17 @@ fn view(state: &State) -> Container<'_, Message> {
             ]
             .spacing(20),
             // scrollable text output
-            container(
-                column![
-                    scrollable(text!("{}", &state.text).font(iced::Font::MONOSPACE))
-                        .height(600)
-                        .width(10000)
-                ]
-                .padding(20)
-            )
+            container(scrollable(
+                markdown::view(
+                    &state.markdown,
+                    markdown::Settings::default(),
+                    markdown::Style::from_palette(Theme::SolarizedDark.palette()),
+                )
+                .map(do_nothing)
+            ))
+            .height(600)
+            .width(10000)
+            .padding(20)
             .style(bordered_box),
             // buttons for confirming or cancelling the operation
             row![
@@ -154,17 +173,22 @@ fn update(state: &mut State, message: Message) {
 
         // event handling for the provisional replace results
         Message::Find => {
+            let mut temp_text = "".to_owned();
             if state.find.0 == "" || state.replace.0 == "" || state.path == "" {
-                state.text = "Please enter all three required parameters.".to_string();
+                temp_text = "Please enter all three required parameters.".to_owned();
+                state.text = format!("{}", &temp_text);
+
                 return;
             } else if state.path.chars().next().unwrap() != '/' {
-                state.text = "Please enter an absolute path.".to_string();
+                temp_text = "Please enter an absolute path.".to_owned();
+                state.text = format!("{}", &temp_text);
+
                 return;
             }
             state.confirm = false;
-            state.text = format!(
-                "Would you like to replace '{}' with '{}' in following files:\n\n-------------------------------------------------------------------\n\n",
-                    state.find.0, state.replace.0
+            temp_text = format!(
+                "Would you like to replace '{}' with '{}' in following files:\n\n --- \n\n",
+                state.find.0, state.replace.0
             );
             match dir_crawl(&state.path) {
                 Ok(list) => {
@@ -176,23 +200,26 @@ fn update(state: &mut State, message: Message) {
                                 if text != "" {
                                     // add the path to the updated file list
                                     new_file_list.push(path);
-                                    state.text = format!("{}{}\n\n", state.text, text);
-                                    state.text = format!("{}---------------------------------------------------------------------------------\n\n", state.text);
+                                    temp_text =
+                                        format!("{}{}\n --- \n\n\n\n", &temp_text, text).clone();
                                 }
                                 state.confirm = true;
                             }
                             Err(e) => {
                                 eprintln!("{:?}", e);
-                                state.text = format!("{} There was a problem: {}", state.text, e);
+                                temp_text = format!("{:?} There was a problem: {}", state.text, e);
                                 state.confirm = false;
                             }
                         };
                     }
+                    // set the content
+                    state.text = format!("{}", &temp_text);
                     // update the file list
                     state.file_list = new_file_list;
                 }
                 Err(e) => eprintln!("There was a problem searching for txt files: {}", e),
             }
+            state.update_markdown();
         }
 
         // event handling for the completion of the replace operation
@@ -200,25 +227,26 @@ fn update(state: &mut State, message: Message) {
             state.text = format!(
                 "Success! Replaced '{}' with '{}' in the following files:\n\n",
                 state.find.0, state.replace.0
-            )
-            .to_string();
+            );
             state.find.1 = state.find.0.clone();
             state.replace.1 = state.replace.0.clone();
             for path in &state.file_list {
                 match find_and_replace(&state.find.0, &state.replace.0, path) {
-                    Ok(_) => state.text = format!("{}\n'{}'\n", state.text, path),
+                    Ok(_) => state.text = format!("{}\n- '{}'\n", state.text, path),
 
                     Err(e) => {
-                        eprintln!("{:?}", e);
                         state.text = format!("Error: {}", e);
                     }
                 };
             }
+            state.text = format!("{}", &state.text);
             state.confirm = false;
+            state.update_markdown();
         }
         Message::Cancel => {
             state.confirm = false;
-            state.text = "Operation cancelled.".to_string();
+            state.text = format!("Operation cancelled.");
+            state.update_markdown();
         }
 
         // event handling for the browse button
@@ -229,25 +257,28 @@ fn update(state: &mut State, message: Message) {
                     state.path = path.display().to_string();
                 }
                 None => {
-                    state.text = "No path selected.".to_string();
+                    state.text = format!("No path selected.");
                 }
             }
+            state.update_markdown();
         }
         Message::ChangePath(dir) => {
             state.path = dir;
+            state.update_markdown();
         }
 
         // update path based on updated find or replace strings
         Message::UpdatePath(slice) => {
             let cloned_path = state.path.clone();
             if !cloned_path.contains(&slice.1) || slice.1 == "" {
-                state.text = "Could not update the path automatically, please update it manually."
-                    .to_string();
+                state.text =
+                    format!("Could not update the path automatically, please update it manually.",);
                 return;
             }
             let new_path = cloned_path.replace(&slice.1, &slice.0);
             state.path = new_path;
         }
+        Message::Nothing => {}
     }
 }
 
@@ -273,7 +304,7 @@ fn main() -> iced::Result {
     // find_and_replace(&args.find, &args.replace_with, &args.directory).unwrap();
     iced::application("Recursive find and replace for .txt files", update, view)
         .window_size(Size {
-            width: 1000.0,
+            width: 5000.0,
             height: 1000.0,
         })
         .run()

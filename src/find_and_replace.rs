@@ -40,7 +40,7 @@ pub fn find(find: &str, replace: &str, path: &str) -> Result<String, Error> {
     }
 
     if file_contains_pattern {
-        text = format!("File: '{}'\n\n{}", path, text);
+        text = format!("### File: '{}'\n\n\n{}", path, text);
     }
 
     Ok(text)
@@ -52,29 +52,32 @@ fn display_line(
     line: &str,
     line_num: usize,
 ) -> Result<String, io::Error> {
-    let mut output = "".to_owned();
+    let mut output = format!("{}: \n", line_num);
     // caculate where to highlight the pattern
-    let n = line.find(find).unwrap();
+    let mut n = line.find(find).unwrap();
     let mut len = find.len();
     let m = line.len() - (n + len);
-    let highlight_line = format!(
-        "{}{}",
-        (0..n).map(|_| " ").collect::<Vec<_>>().concat(),
-        (0..len).map(|_| "-").collect::<Vec<_>>().concat()
+    let (old_line_1, old_line_temp) = line.clone().split_at(n);
+    let (find, old_line_2) = old_line_temp.clone().split_at(len);
+    let highlight_old_line = format!(
+        "{}**[{}](https://en.wikipedia.org)**{}",
+        old_line_1, find, old_line_2
     );
     // add the line with original pattern and a highlight line bellow
-    output = format!("{}\n{}: {}\n   {}", output, line_num, line, highlight_line);
 
-    let new_line = line.replace(find, replace);
+    let new_line = line.replace(find, replace).clone();
+    n = new_line.find(replace).unwrap();
     len = replace.len();
-    let replaced_highlight_line = format!(
-        "{}{}",
-        (0..n).map(|_| " ").collect::<Vec<_>>().concat(),
-        (0..len).map(|_| "+").collect::<Vec<_>>().concat()
+    let binding = new_line.clone();
+    let (new_line_1, new_line_temp) = binding.split_at(n);
+    let (replace, new_line_2) = new_line_temp.clone().split_at(len);
+    let highlight_new_line = format!(
+        "{}**[{}](https://en.wikipedia.org)**{}",
+        &new_line_1, replace, new_line_2
     );
     output = format!(
-        "{}\n=> {}\n   {}",
-        output, new_line, replaced_highlight_line
+        "{}\n{}\n\n => {}\n\n",
+        output, &highlight_old_line, &highlight_new_line
     );
 
     Ok(output)
