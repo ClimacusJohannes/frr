@@ -1,6 +1,7 @@
-use anyhow::{Context, Error, Result};
+use anyhow::{bail, Context, Error, Result};
 use log::kv::ToKey;
 use std::{
+    f32::consts::E,
     fmt::format,
     fs,
     io::{self, BufRead, BufWriter, Write},
@@ -28,7 +29,11 @@ pub async fn find_from_vec(
         output = format!("{}{}", output, f);
     }
 
-    Ok(output)
+    if output == "" {
+        bail!(Box::new("Nothing found"));
+    } else {
+        Ok(output)
+    }
 }
 
 pub async fn find(find: String, replace: String, path: String) -> Result<String, Error> {
@@ -52,7 +57,7 @@ pub async fn find(find: String, replace: String, path: String) -> Result<String,
     }
 
     if file_contains_pattern {
-        text = format!("\\\\ ### File: '{}'\n\n\n{}", path, text);
+        text = format!("\n\n\n### File: '{}'\n\n\n{}", path, text);
     }
 
     Ok(text)
@@ -110,7 +115,7 @@ pub async fn replace_from_vec(
                 output = format!("{}\n- '{}'\n", output, &path);
             }
             Err(e) => {
-                eprintln!("Error: {}", e);
+                // eprintln!("Error: {}", e);
             }
         }
     }
@@ -124,7 +129,9 @@ pub async fn find_and_replace(
     path: String,
 ) -> Result<(), Error> {
     let f = fs::File::open(&path)?;
-    let reader = tokio::fs::read_to_string(&path).await?;
+    let reader = tokio::fs::read_to_string(&path)
+        .await
+        .with_context(|| format!("Could not read file: '{}'", &path))?;
     let mut text = "".to_string();
     let mut file_contains_pattern = false;
 
@@ -142,8 +149,9 @@ pub async fn find_and_replace(
         }
     }
 
-    let _ =
-        fs::write(path.clone(), text).with_context(|| format!("Error writing to file '{}'!", path));
+    let _ = tokio::fs::write(path.clone(), text)
+        .await
+        .with_context(|| format!("Error writing to file '{}'!", path));
 
     if file_contains_pattern {
         Ok(())
@@ -181,7 +189,7 @@ mod tests {
         let contents = bury_in_lorem_ipsum(find);
         let replace = "241220_LU02_tzajec_RNase_modifications_E0-0_02/241220_LU02_tzajec_RNase_modifications_E0-0_01.c.mzXML";
         let _ = create_file_with_contents(path, &contents).unwrap();
-        let result = find_and_replace(find, replace, path);
+        let result = find_and_replace(find.to_owned(), replace.to_owned(), path.to_owned()).await;
 
         assert!(result.is_ok());
 

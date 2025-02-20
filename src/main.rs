@@ -7,6 +7,7 @@ use iced::futures::stream::Collect;
 use iced::widget::button::secondary;
 use iced::widget::container::{bordered_box, rounded_box};
 use iced::widget::markdown::Url;
+use iced::widget::scrollable::{scroll_by, AbsoluteOffset, Id};
 use iced::widget::shader::wgpu::hal::TextureFormatCapabilities;
 use iced::widget::text::{Rich, Span};
 use iced::widget::text_editor::{Action, Content};
@@ -14,9 +15,9 @@ use iced::widget::{
     button, column, container, markdown, rich_text, row, scrollable, text, text_editor, text_input,
     Button, Column, Container, Scrollable, Text,
 };
-use iced::{Border, Element, Renderer, Size, Task, Theme};
+use iced::{keyboard, Border, Element, Renderer, Size, Task, Theme};
 use log::kv::ToKey;
-use rfd::FileDialog;
+use rfd::{AsyncFileDialog, FileDialog};
 use std::fmt::format;
 use std::fs::{self, DirEntry};
 use std::io::{BufRead, BufReader, BufWriter, Write};
@@ -35,6 +36,7 @@ struct State {
     markdown: Vec<markdown::Item>,
     confirm: bool,
     file_list: Vec<String>,
+    focus: String,
 }
 
 impl State {
@@ -57,6 +59,10 @@ enum Message {
     Replace,
     Cancel,
     Nothing,
+    EnterKeyPressed,
+    TabKeyPressed,
+    MoveUp,
+    MoveDown,
 }
 
 fn do_nothing(action: Url) -> Message {
@@ -70,27 +76,30 @@ fn view(state: &State) -> Container<'_, Message> {
                 // text input for find, replace and directory
                 column![
                     text_input("Find", &state.find.0)
+                        .id("find")
                         .on_input_maybe(if !state.confirm {
                             Some(Message::FindChanged)
                         } else {
                             Option::None
                         })
-                        .on_submit(Message::Replace),
+                        .on_submit(Message::EnterKeyPressed),
                     text_input("Replace with", &state.replace.0)
+                        .id("replace")
                         .on_input_maybe(if !state.confirm {
                             Some(Message::ReplaceChanged)
                         } else {
                             Option::None
                         })
-                        .on_submit(Message::Replace),
+                        .on_submit(Message::EnterKeyPressed),
                     row![
                         text_input("Directory", &state.path)
+                            .id("dir")
                             .on_input_maybe(if !state.confirm {
                                 Some(Message::ChangePath)
                             } else {
                                 Option::None
                             })
-                            .on_submit(Message::Replace),
+                            .on_submit(Message::EnterKeyPressed),
                         button("Browse")
                             .on_press_maybe(if !state.confirm {
                                 Some(Message::BrowsePath)
@@ -137,14 +146,17 @@ fn view(state: &State) -> Container<'_, Message> {
             ]
             .spacing(20),
             // scrollable text output
-            container(scrollable(
-                markdown::view(
-                    &state.markdown,
-                    markdown::Settings::default(),
-                    markdown::Style::from_palette(Theme::CatppuccinLatte.palette()),
+            container(
+                scrollable(
+                    markdown::view(
+                        &state.markdown,
+                        markdown::Settings::default(),
+                        markdown::Style::from_palette(Theme::CatppuccinLatte.palette()),
+                    )
+                    .map(do_nothing)
                 )
-                .map(do_nothing)
-            ))
+                .id(Id::new("scrollable"))
+            )
             .height(600)
             .width(10000)
             .padding(20)
@@ -197,23 +209,18 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
 
         // event handling for the provisional replace results
         Message::Find => {
-            let mut temp_text = "".to_owned();
-            if state.find.0 == "" || state.replace.0 == "" || state.path == "" {
-                temp_text = "Please enter all three required parameters.".to_owned();
-                state.text = format!("{}", &temp_text);
-
-                return Task::none();
-            } else if state.path.chars().next().unwrap() != '/' {
-                temp_text = "Please enter an absolute path.".to_owned();
-                state.text = format!("{}", &temp_text);
-
-                return Task::none();
-            }
             state.confirm = false;
-            temp_text = format!(
-                "Would you like to replace '{}' with '{}' in following files:\n\n --- \n\n",
-                state.find.0, state.replace.0
-            );
+            if state.find.0 == "" || state.replace.0 == "" || state.path == "" {
+                return Task::done(Message::AddText(
+                    "Please enter all three required parameters.".to_owned(),
+                ));
+            } else if state.path.chars().next().unwrap() != '/' {
+                return Task::done(Message::AddText(
+                    "Please enter an absolute path.".to_owned(),
+                ));
+            }
+            state.text = "# Searching...".to_owned();
+            state.update_markdown();
             match dir_crawl(&state.path) {
                 Ok(list) => {
                     state.file_list = list.clone();
@@ -248,7 +255,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
         Message::Confirm(text) => {
             state.confirm = false;
             Task::done(Message::AddText(format!(
-                "Replaced {} with {} in the following files: {}",
+                "Replaced '{}' with '{}' in the following files: {}",
                 state.find.0, state.replace.0, text
             )))
         }
@@ -261,9 +268,13 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
 
         // event handling for the completion of the replace operation
         Message::Replace => {
+            state.text = "# Replacing...".to_owned();
+            state.update_markdown();
             // saving the find and replace for the path formatting
             state.find.1 = state.find.0.clone();
             state.replace.1 = state.replace.0.clone();
+
+            state.confirm = false;
 
             return Task::perform(
                 replace_from_vec(
@@ -287,17 +298,9 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
 
         // event handling for the browse button
         Message::BrowsePath => {
-            let path = FileDialog::new().pick_folder();
-            match path {
-                Some(path) => {
-                    state.path = path.display().to_string();
-                }
-                None => {
-                    state.text = format!("No path selected.");
-                }
-            }
-            state.update_markdown();
-            Task::none()
+            return Task::perform(AsyncFileDialog::new().pick_folder(), |path| {
+                Message::ChangePath(path.unwrap().path().display().to_string())
+            });
         }
         Message::ChangePath(dir) => {
             state.path = dir;
@@ -311,30 +314,80 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             if !cloned_path.contains(&slice.1) || slice.1 == "" {
                 state.text =
                     format!("Could not update the path automatically, please update it manually.",);
-                Task::<Task<Message>>::none();
             }
+            state.update_markdown();
             let new_path = cloned_path.replace(&slice.1, &slice.0);
             state.path = new_path;
             Task::none()
         }
+
+        Message::EnterKeyPressed => {
+            if state.confirm {
+                return Task::done(Message::Replace);
+            }
+            Task::done(Message::Find)
+        }
+
+        Message::TabKeyPressed => {
+            let ids = vec!["find", "replace", "dir"];
+            let mut ids_iter = ids.clone().into_iter();
+            loop {
+                match ids_iter.next() {
+                    Some(id) => {
+                        if id == state.focus {
+                            state.focus = ids_iter
+                                .next()
+                                .or_else(|| Some(ids.get(0).unwrap()))
+                                .unwrap()
+                                .to_string();
+                            break;
+                        }
+                    }
+                    None => {
+                        state.focus = ids.get(0).unwrap().to_string();
+                        break;
+                    }
+                }
+            }
+
+            text_input::focus(state.focus.as_str().to_owned())
+        }
+
+        Message::MoveDown => scroll_by(
+            Id::new("scrollable"),
+            AbsoluteOffset {
+                x: 0.0 as f32,
+                y: 15.0 as f32,
+            },
+        ),
+
+        Message::MoveUp => scroll_by(
+            Id::new("scrollable"),
+            AbsoluteOffset {
+                x: 0.0 as f32,
+                y: -15.0 as f32,
+            },
+        ),
+
         Message::Nothing => Task::none(),
     }
 }
 
-#[derive(Parser, Debug)]
-#[command(version, about, long_about = None)]
-struct Args {
-    /// The string to find
-    #[arg(short, long)]
-    find: String,
+fn subscription(_state: &State) -> iced::Subscription<Message> {
+    fn handle_hotkey(key: keyboard::Key, _modifiers: keyboard::Modifiers) -> Option<Message> {
+        match key {
+            keyboard::key::Key::Named(keyboard::key::Named::Enter) => {
+                Some(Message::EnterKeyPressed)
+            }
+            keyboard::key::Key::Named(keyboard::key::Named::Tab) => Some(Message::TabKeyPressed),
+            // keyboard::Key::Character("n") => Some(Message::OtherMessageToCall),
+            keyboard::key::Key::Named(keyboard::key::Named::ArrowUp) => Some(Message::MoveUp),
+            keyboard::key::Key::Named(keyboard::key::Named::ArrowDown) => Some(Message::MoveDown),
+            _ => None,
+        }
+    }
 
-    /// what to replace the find string with
-    #[arg(short, long)]
-    replace_with: String,
-
-    /// Directory to search for files
-    #[arg(short, long, default_value = "data")]
-    directory: String,
+    keyboard::on_key_press(handle_hotkey)
 }
 
 fn main() -> iced::Result {
@@ -342,6 +395,7 @@ fn main() -> iced::Result {
 
     // find_and_replace(&args.find, &args.replace_with, &args.directory).unwrap();
     iced::application("Recursive find and replace for .txt files", update, view)
+        .subscription(subscription)
         .theme(|_| Theme::CatppuccinLatte)
         .window_size(Size {
             width: 5000.0,
