@@ -3,8 +3,10 @@ use log::kv::ToKey;
 use std::{
     fmt::format,
     fs,
-    io::{self, BufRead, BufReader, BufWriter, Write},
+    io::{self, BufRead, BufWriter, Write},
 };
+
+use tokio::io::BufReader;
 
 use iced::{
     color,
@@ -13,34 +15,44 @@ use iced::{
 
 // a function that will find all the occurrences of the pattern in a file (path)
 // and display them visually
-pub fn find(find: &str, replace: &str, path: &str) -> Result<String, Error> {
-    let f = fs::File::open(path)?;
-    let reader = BufReader::new(f);
+
+pub async fn find_from_vec(
+    find_pat: String,
+    replace: String,
+    paths: Vec<String>,
+) -> Result<String, Error> {
+    let mut output = "".to_owned();
+
+    for path in paths.into_iter() {
+        let f = find(find_pat.to_owned(), replace.to_owned(), path.to_string()).await?;
+        output = format!("{}{}", output, f);
+    }
+
+    Ok(output)
+}
+
+pub async fn find(find: String, replace: String, path: String) -> Result<String, Error> {
+    let path = path.to_owned();
+    let f = fs::File::open(&path)?;
+    let reader = tokio::fs::read_to_string(&path).await?;
     let mut text = "".to_owned();
     let mut file_contains_pattern = false;
 
     for (num, line) in reader.lines().enumerate() {
         let mut unwraped_line = "".to_owned();
 
-        match line.with_context(|| format!("Failed to read line {}", num + 1)) {
-            Ok(line) => {
-                unwraped_line = line;
-            }
-            Err(e) => {
-                eprintln!("While reading file '{}' and error occurred: {}", path, e);
-            }
-        }
+        unwraped_line = format!("{}", line);
 
-        if unwraped_line.contains(find) {
+        if unwraped_line.contains(&find) {
             file_contains_pattern = true;
-            let display_line = display_line(find, replace, &unwraped_line, num + 1)
+            let display_line = display_line(&find, &replace, &unwraped_line, num + 1)
                 .expect("Line was not able to be displayed.");
             text = format!("{}{}", text, display_line);
         }
     }
 
     if file_contains_pattern {
-        text = format!("### File: '{}'\n\n\n{}", path, text);
+        text = format!("\\\\ ### File: '{}'\n\n\n{}", path, text);
     }
 
     Ok(text)
@@ -83,45 +95,64 @@ fn display_line(
     Ok(output)
 }
 
-pub fn find_and_replace(find: &str, replace_with: &str, path: &str) -> Result<(), Error> {
-    let f = fs::File::open(path)?;
-    let reader = BufReader::new(f);
+pub async fn replace_from_vec(
+    find_pat: String,
+    replace: String,
+    paths: Vec<String>,
+) -> Result<String, Error> {
+    let mut output = "".to_owned();
+
+    for path in paths.into_iter() {
+        let result =
+            find_and_replace(find_pat.to_owned(), replace.to_owned(), path.to_string()).await;
+        match result {
+            Ok(_) => {
+                output = format!("{}\n- '{}'\n", output, &path);
+            }
+            Err(e) => {
+                eprintln!("Error: {}", e);
+            }
+        }
+    }
+
+    Ok(output)
+}
+
+pub async fn find_and_replace(
+    find: String,
+    replace_with: String,
+    path: String,
+) -> Result<(), Error> {
+    let f = fs::File::open(&path)?;
+    let reader = tokio::fs::read_to_string(&path).await?;
     let mut text = "".to_string();
+    let mut file_contains_pattern = false;
 
     for (num, line) in reader.lines().enumerate() {
         let mut unwraped_line = "".to_owned();
 
-        match line.with_context(|| format!("Failed to read line {}", num + 1)) {
-            Ok(line) => {
-                unwraped_line = line;
-            }
-            Err(e) => {
-                eprintln!(
-                    "While replacing the pattern in file '{}' and error occured: {}",
-                    path, e
-                );
-                continue;
-            }
-        }
+        unwraped_line = format!("{}", line);
 
-        if unwraped_line.contains(find) {
-            let new_line = unwraped_line.replace(find, replace_with);
+        if unwraped_line.contains(&find) {
+            file_contains_pattern = true;
+            let new_line = unwraped_line.replace(&find, &replace_with);
             text = format!("{}{}\n", &text, &new_line);
         } else {
             text = format!("{}{}\n", &text, &unwraped_line);
         }
     }
 
-    // stripping the last line
-    // text = text
-    //     .strip_suffix("\n")
-    //     .expect("Count not strip suffix")
-    //     .to_owned();
+    let _ =
+        fs::write(path.clone(), text).with_context(|| format!("Error writing to file '{}'!", path));
 
-    // writing to file
-    let _ = fs::write(path, text).with_context(|| format!("Error writing to file '{}'!", path));
-
-    Ok(())
+    if file_contains_pattern {
+        Ok(())
+    } else {
+        Err(Error::new(io::Error::new(
+            io::ErrorKind::NotFound,
+            "patter not found in file",
+        )))
+    }
 }
 
 mod tests {

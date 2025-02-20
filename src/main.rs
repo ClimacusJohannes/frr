@@ -1,19 +1,23 @@
 use clap::Parser;
-use find_and_replace::find_and_replace;
+use find_and_replace::{find, find_and_replace, find_from_vec, replace_from_vec};
 use iced::alignment::Horizontal::Left;
+use iced::border::Radius;
 use iced::futures::never;
 use iced::futures::stream::Collect;
 use iced::widget::button::secondary;
-use iced::widget::container::bordered_box;
+use iced::widget::container::{bordered_box, rounded_box};
 use iced::widget::markdown::Url;
+use iced::widget::shader::wgpu::hal::TextureFormatCapabilities;
 use iced::widget::text::{Rich, Span};
 use iced::widget::text_editor::{Action, Content};
 use iced::widget::{
     button, column, container, markdown, rich_text, row, scrollable, text, text_editor, text_input,
-    Column, Container, Scrollable, Text,
+    Button, Column, Container, Scrollable, Text,
 };
-use iced::{Element, Renderer, Size, Theme};
+use iced::{Border, Element, Renderer, Size, Task, Theme};
+use log::kv::ToKey;
 use rfd::FileDialog;
+use std::fmt::format;
 use std::fs::{self, DirEntry};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 
@@ -47,6 +51,9 @@ enum Message {
     UpdatePath((String, String)),
     ChangePath(String),
     Find,
+    EnableConfirm(String),
+    Confirm(String),
+    AddText(String),
     Replace,
     Cancel,
     Nothing,
@@ -100,16 +107,31 @@ fn view(state: &State) -> Container<'_, Message> {
                 //buttons for updating path and running the find and replace operation
                 column![
                     button("Update path - find (info)")
-                        .on_press(Message::UpdatePath(state.find.clone()))
+                        .on_press_maybe(if !state.confirm {
+                            Some(Message::UpdatePath(state.find.clone()))
+                        } else {
+                            Option::None
+                        })
                         .width(220)
                         .height(35)
                         .style(secondary),
                     button("Update path - replace")
-                        .on_press(Message::UpdatePath(state.replace.clone()))
+                        .on_press_maybe(if !state.confirm {
+                            Some(Message::UpdatePath(state.replace.clone()))
+                        } else {
+                            Option::None
+                        })
                         .width(220)
                         .height(35)
                         .style(secondary),
-                    button("Find").on_press(Message::Find).width(220).height(35),
+                    button("Find")
+                        .on_press_maybe(if !state.confirm {
+                            Some(Message::Find)
+                        } else {
+                            Option::None
+                        })
+                        .width(220)
+                        .height(35),
                 ]
                 .spacing(20),
             ]
@@ -119,14 +141,14 @@ fn view(state: &State) -> Container<'_, Message> {
                 markdown::view(
                     &state.markdown,
                     markdown::Settings::default(),
-                    markdown::Style::from_palette(Theme::SolarizedDark.palette()),
+                    markdown::Style::from_palette(Theme::CatppuccinLatte.palette()),
                 )
                 .map(do_nothing)
             ))
             .height(600)
             .width(10000)
             .padding(20)
-            .style(bordered_box),
+            .style(rounded_box),
             // buttons for confirming or cancelling the operation
             row![
                 button("Replace")
@@ -153,7 +175,7 @@ fn view(state: &State) -> Container<'_, Message> {
     .into()
 }
 
-fn update(state: &mut State, message: Message) {
+fn update(state: &mut State, message: Message) -> Task<Message> {
     match message {
         // event handling for the find text input
         Message::FindChanged(find) => {
@@ -161,6 +183,7 @@ fn update(state: &mut State, message: Message) {
             let len = find.trim_end_matches(&['\r', '\n'][..]).len();
             trunc_find.truncate(len);
             state.find.0 = trunc_find;
+            Task::none()
         }
 
         // event handling for the replace text input
@@ -169,6 +192,7 @@ fn update(state: &mut State, message: Message) {
             let len = replace.trim_end_matches(&['\r', '\n'][..]).len();
             trunc_replace.truncate(len);
             state.replace.0 = trunc_replace;
+            Task::none()
         }
 
         // event handling for the provisional replace results
@@ -178,12 +202,12 @@ fn update(state: &mut State, message: Message) {
                 temp_text = "Please enter all three required parameters.".to_owned();
                 state.text = format!("{}", &temp_text);
 
-                return;
+                return Task::none();
             } else if state.path.chars().next().unwrap() != '/' {
                 temp_text = "Please enter an absolute path.".to_owned();
                 state.text = format!("{}", &temp_text);
 
-                return;
+                return Task::none();
             }
             state.confirm = false;
             temp_text = format!(
@@ -194,59 +218,71 @@ fn update(state: &mut State, message: Message) {
                 Ok(list) => {
                     state.file_list = list.clone();
                     let mut new_file_list: Vec<String> = vec![];
-                    for path in list {
-                        match find_and_replace::find(&state.find.0, &state.replace.0, &path) {
+                    return Task::perform(
+                        find_from_vec(
+                            state.find.0.to_owned(),
+                            state.replace.0.to_owned(),
+                            state.file_list.clone(),
+                        ),
+                        |text| match text {
                             Ok(text) => {
-                                if text != "" {
-                                    // add the path to the updated file list
-                                    new_file_list.push(path);
-                                    temp_text =
-                                        format!("{}{}\n --- \n\n\n\n", &temp_text, text).clone();
-                                }
-                                state.confirm = true;
+                                return Message::EnableConfirm(text);
                             }
-                            Err(e) => {
-                                eprintln!("{:?}", e);
-                                temp_text = format!("{:?} There was a problem: {}", state.text, e);
-                                state.confirm = false;
-                            }
-                        };
-                    }
-                    // set the content
-                    state.text = format!("{}", &temp_text);
-                    // update the file list
-                    state.file_list = new_file_list;
+                            Err(e) => return Message::AddText(format!("{}", e)),
+                        },
+                    );
                 }
-                Err(e) => eprintln!("There was a problem searching for txt files: {}", e),
+                Err(e) => {
+                    eprintln!("There was a problem searching for txt files: {}", e);
+                }
             }
             state.update_markdown();
+            Task::none()
+        }
+
+        Message::EnableConfirm(text) => {
+            state.confirm = true;
+            Task::done(Message::AddText(text))
+        }
+
+        Message::Confirm(text) => {
+            state.confirm = false;
+            Task::done(Message::AddText(format!(
+                "Replaced {} with {} in the following files: {}",
+                state.find.0, state.replace.0, text
+            )))
+        }
+
+        Message::AddText(text) => {
+            state.text = format!("{}", text);
+            state.update_markdown();
+            Task::none()
         }
 
         // event handling for the completion of the replace operation
         Message::Replace => {
-            state.text = format!(
-                "Success! Replaced '{}' with '{}' in the following files:\n\n",
-                state.find.0, state.replace.0
-            );
+            // saving the find and replace for the path formatting
             state.find.1 = state.find.0.clone();
             state.replace.1 = state.replace.0.clone();
-            for path in &state.file_list {
-                match find_and_replace(&state.find.0, &state.replace.0, path) {
-                    Ok(_) => state.text = format!("{}\n- '{}'\n", state.text, path),
 
-                    Err(e) => {
-                        state.text = format!("Error: {}", e);
-                    }
-                };
-            }
-            state.text = format!("{}", &state.text);
-            state.confirm = false;
-            state.update_markdown();
+            return Task::perform(
+                replace_from_vec(
+                    state.find.0.to_owned(),
+                    state.replace.0.to_owned(),
+                    state.file_list.clone(),
+                ),
+                |text| match text {
+                    Ok(text) => return Message::Confirm(text),
+                    Err(e) => Message::Confirm(format!("{}", e)),
+                },
+            );
         }
+
         Message::Cancel => {
             state.confirm = false;
             state.text = format!("Operation cancelled.");
             state.update_markdown();
+            Task::none()
         }
 
         // event handling for the browse button
@@ -261,10 +297,12 @@ fn update(state: &mut State, message: Message) {
                 }
             }
             state.update_markdown();
+            Task::none()
         }
         Message::ChangePath(dir) => {
             state.path = dir;
             state.update_markdown();
+            Task::none()
         }
 
         // update path based on updated find or replace strings
@@ -273,12 +311,13 @@ fn update(state: &mut State, message: Message) {
             if !cloned_path.contains(&slice.1) || slice.1 == "" {
                 state.text =
                     format!("Could not update the path automatically, please update it manually.",);
-                return;
+                Task::<Task<Message>>::none();
             }
             let new_path = cloned_path.replace(&slice.1, &slice.0);
             state.path = new_path;
+            Task::none()
         }
-        Message::Nothing => {}
+        Message::Nothing => Task::none(),
     }
 }
 
@@ -303,6 +342,7 @@ fn main() -> iced::Result {
 
     // find_and_replace(&args.find, &args.replace_with, &args.directory).unwrap();
     iced::application("Recursive find and replace for .txt files", update, view)
+        .theme(|_| Theme::CatppuccinLatte)
         .window_size(Size {
             width: 5000.0,
             height: 1000.0,
