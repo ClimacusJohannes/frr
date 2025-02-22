@@ -180,7 +180,7 @@ fn view(state: &State) -> Container<'_, Message> {
             )
             .style(|theme| { container::rounded_box(theme).set_border_radius(BORDER_RADIUS) })
             .height(600)
-            .width(10000)
+            .width(8000)
             .padding(20),
             // buttons for confirming or cancelling the operation
             row![
