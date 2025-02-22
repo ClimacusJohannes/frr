@@ -179,7 +179,7 @@ fn view(state: &State) -> Container<'_, Message> {
                 .id(Id::new("scrollable"))
             )
             .style(|theme| { container::rounded_box(theme).set_border_radius(BORDER_RADIUS) })
-            .height(600)
+            .height(400)
             .width(8000)
             .padding(20),
             // buttons for confirming or cancelling the operation
