@@ -73,7 +73,7 @@ fn do_nothing(action: Url) -> Message {
     Message::Nothing
 }
 
-const BORDER_RADIUS: f32 = 7.5;
+const BORDER_RADIUS: f32 = 10;
 
 fn view(state: &State) -> Container<'_, Message> {
     container(
