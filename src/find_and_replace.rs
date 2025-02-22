@@ -70,34 +70,36 @@ fn display_line(
     line_num: usize,
 ) -> Result<String, io::Error> {
     let mut output = format!("{}: \n", line_num);
-    // caculate where to highlight the pattern
-    let mut n = line.find(find).unwrap();
-    let mut len = find.len();
-    let m = line.len() - (n + len);
-    let (old_line_1, old_line_temp) = line.clone().split_at(n);
-    let (find, old_line_2) = old_line_temp.clone().split_at(len);
-    let highlight_old_line = format!(
-        "{}**[{}](https://en.wikipedia.org)**{}",
-        old_line_1, find, old_line_2
-    );
-    // add the line with original pattern and a highlight line bellow
 
+    let highlight_old_line = highlight_pattern(find, line);
     let new_line = line.replace(find, replace).clone();
-    n = new_line.find(replace).unwrap();
-    len = replace.len();
-    let binding = new_line.clone();
-    let (new_line_1, new_line_temp) = binding.split_at(n);
-    let (replace, new_line_2) = new_line_temp.clone().split_at(len);
-    let highlight_new_line = format!(
-        "{}**[{}](https://en.wikipedia.org)**{}",
-        &new_line_1, replace, new_line_2
-    );
+    let highlight_new_line = highlight_pattern(replace, &new_line);
+
     output = format!(
         "{}\n{}\n\n => {}\n\n",
         output, &highlight_old_line, &highlight_new_line
     );
 
     Ok(output)
+}
+
+fn highlight_pattern(pattern: &str, line: &str) -> String {
+    let n = line.find(pattern);
+    match n {
+        Some(n) => {
+            let len = pattern.len();
+            let m = line.len() - (n + len);
+            let (old_line_1, old_line_temp) = line.split_at(n);
+            let (pattern, old_line_2) = old_line_temp.split_at(len);
+            return format!(
+                "{}**[{}](https://en.wikipedia.org)**{}",
+                old_line_1,
+                pattern,
+                &highlight_pattern(pattern, old_line_2)
+            );
+        }
+        None => return "".to_owned(),
+    }
 }
 
 pub async fn replace_from_vec(
