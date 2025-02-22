@@ -1,21 +1,22 @@
 use clap::Parser;
 use find_and_replace::{find, find_and_replace, find_from_vec, replace_from_vec};
 use iced::alignment::Horizontal::Left;
-use iced::border::Radius;
+use iced::border::{self, Radius};
 use iced::futures::never;
 use iced::futures::stream::Collect;
-use iced::widget::button::secondary;
+use iced::widget::button::{primary, secondary, Status};
 use iced::widget::container::{bordered_box, rounded_box};
 use iced::widget::markdown::Url;
 use iced::widget::scrollable::{scroll_by, AbsoluteOffset, Id};
 use iced::widget::shader::wgpu::hal::TextureFormatCapabilities;
 use iced::widget::text::{Rich, Span};
 use iced::widget::text_editor::{Action, Content};
+use iced::widget::toggler::default;
 use iced::widget::{
     button, column, container, markdown, rich_text, row, scrollable, text, text_editor, text_input,
     Button, Column, Container, Scrollable, Text,
 };
-use iced::{keyboard, Border, Element, Renderer, Size, Task, Theme};
+use iced::{keyboard, Background, Border, Color, Element, Renderer, Size, Task, Theme};
 use log::kv::ToKey;
 use rfd::{AsyncFileDialog, FileDialog};
 use std::fmt::format;
@@ -24,8 +25,11 @@ use std::io::{BufRead, BufReader, BufWriter, Write};
 
 mod dir_crawl;
 mod find_and_replace;
+mod focused;
+mod has_border;
 
 use dir_crawl::dir_crawl;
+use has_border::HasBorder;
 
 #[derive(Default, Clone)]
 struct State {
@@ -69,6 +73,8 @@ fn do_nothing(action: Url) -> Message {
     Message::Nothing
 }
 
+const BORDER_RADIUS: f32 = 5.0;
+
 fn view(state: &State) -> Container<'_, Message> {
     container(
         column![
@@ -82,6 +88,9 @@ fn view(state: &State) -> Container<'_, Message> {
                         } else {
                             Option::None
                         })
+                        .style(|theme, status: text_input::Status| {
+                            text_input::default(theme, status).set_border_radius(BORDER_RADIUS)
+                        })
                         .on_submit(Message::EnterKeyPressed),
                     text_input("Replace with", &state.replace.0)
                         .id("replace")
@@ -89,6 +98,9 @@ fn view(state: &State) -> Container<'_, Message> {
                             Some(Message::ReplaceChanged)
                         } else {
                             Option::None
+                        })
+                        .style(|theme, status: text_input::Status| {
+                            text_input::default(theme, status).set_border_radius(BORDER_RADIUS)
                         })
                         .on_submit(Message::EnterKeyPressed),
                     row![
@@ -99,6 +111,9 @@ fn view(state: &State) -> Container<'_, Message> {
                             } else {
                                 Option::None
                             })
+                            .style(|theme, status: text_input::Status| {
+                                text_input::default(theme, status).set_border_radius(BORDER_RADIUS)
+                            })
                             .on_submit(Message::EnterKeyPressed),
                         button("Browse")
                             .on_press_maybe(if !state.confirm {
@@ -106,8 +121,10 @@ fn view(state: &State) -> Container<'_, Message> {
                             } else {
                                 Option::None
                             })
-                            .width(80)
-                            .height(35),
+                            .style(|theme: &Theme, status: Status| {
+                                button::primary(theme, status).set_border_radius(BORDER_RADIUS)
+                            })
+                            .width(80),
                     ]
                     .spacing(10),
                 ]
@@ -115,15 +132,16 @@ fn view(state: &State) -> Container<'_, Message> {
                 .spacing(20),
                 //buttons for updating path and running the find and replace operation
                 column![
-                    button("Update path - find (info)")
+                    button("Update path - find")
                         .on_press_maybe(if !state.confirm {
                             Some(Message::UpdatePath(state.find.clone()))
                         } else {
                             Option::None
                         })
                         .width(220)
-                        .height(35)
-                        .style(secondary),
+                        .style(|theme, status| {
+                            button::secondary(theme, status).set_border_radius(BORDER_RADIUS)
+                        }),
                     button("Update path - replace")
                         .on_press_maybe(if !state.confirm {
                             Some(Message::UpdatePath(state.replace.clone()))
@@ -131,16 +149,19 @@ fn view(state: &State) -> Container<'_, Message> {
                             Option::None
                         })
                         .width(220)
-                        .height(35)
-                        .style(secondary),
+                        .style(|theme, status| {
+                            button::secondary(theme, status).set_border_radius(BORDER_RADIUS)
+                        }),
                     button("Find")
                         .on_press_maybe(if !state.confirm {
                             Some(Message::Find)
                         } else {
                             Option::None
                         })
-                        .width(220)
-                        .height(35),
+                        .style(|theme: &Theme, status: Status| {
+                            button::primary(theme, status).set_border_radius(BORDER_RADIUS)
+                        })
+                        .width(220),
                 ]
                 .spacing(20),
             ]
@@ -157,10 +178,10 @@ fn view(state: &State) -> Container<'_, Message> {
                 )
                 .id(Id::new("scrollable"))
             )
+            .style(|theme| { container::rounded_box(theme).set_border_radius(BORDER_RADIUS) })
             .height(600)
             .width(10000)
-            .padding(20)
-            .style(rounded_box),
+            .padding(20),
             // buttons for confirming or cancelling the operation
             row![
                 button("Replace")
@@ -169,14 +190,18 @@ fn view(state: &State) -> Container<'_, Message> {
                     } else {
                         Option::None
                     })
-                    .height(100),
+                    .style(|theme: &Theme, status: Status| {
+                        button::primary(theme, status).set_border_radius(BORDER_RADIUS)
+                    }),
                 button("Cancel")
                     .on_press_maybe(if state.confirm {
                         Some(Message::Cancel)
                     } else {
                         Option::None
                     })
-                    .height(100),
+                    .style(|theme: &Theme, status: Status| {
+                        button::secondary(theme, status).set_border_radius(BORDER_RADIUS)
+                    }),
             ]
             .height(40)
             .spacing(20)
@@ -224,7 +249,6 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             match dir_crawl(&state.path) {
                 Ok(list) => {
                     state.file_list = list.clone();
-                    let mut new_file_list: Vec<String> = vec![];
                     return Task::perform(
                         find_from_vec(
                             state.find.0.to_owned(),
@@ -329,7 +353,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
         }
 
         Message::TabKeyPressed => {
-            let ids = vec!["find", "replace", "dir"];
+            let ids = vec!["replace", "dir", "find"];
             let mut ids_iter = ids.clone().into_iter();
             loop {
                 match ids_iter.next() {
