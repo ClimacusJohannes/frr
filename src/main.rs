@@ -1,31 +1,13 @@
-use clap::Parser;
-use find_and_replace::{find, find_and_replace, find_from_vec, replace_from_vec};
-use iced::alignment::Horizontal::Left;
-use iced::border::{self, Radius};
-use iced::futures::never;
-use iced::futures::stream::Collect;
-use iced::widget::button::{primary, secondary, Status};
-use iced::widget::container::{bordered_box, rounded_box};
+use find_and_replace::{find_from_vec, replace_from_vec};
+use iced::widget::button::Status;
 use iced::widget::markdown::Url;
 use iced::widget::scrollable::{scroll_by, AbsoluteOffset, Id};
-use iced::widget::shader::wgpu::hal::TextureFormatCapabilities;
-use iced::widget::text::{Rich, Span};
-use iced::widget::text_editor::{Action, Content};
-use iced::widget::toggler::default;
-use iced::widget::{
-    button, column, container, markdown, rich_text, row, scrollable, text, text_editor, text_input,
-    Button, Column, Container, Scrollable, Text,
-};
-use iced::{keyboard, Background, Border, Color, Element, Renderer, Size, Task, Theme};
-use log::kv::ToKey;
-use rfd::{AsyncFileDialog, FileDialog};
-use std::fmt::format;
-use std::fs::{self, DirEntry};
-use std::io::{BufRead, BufReader, BufWriter, Write};
+use iced::widget::{button, column, container, markdown, row, scrollable, text_input, Container};
+use iced::{keyboard, Size, Task, Theme};
+use rfd::AsyncFileDialog;
 
 mod dir_crawl;
 mod find_and_replace;
-mod focused;
 mod has_border;
 
 use dir_crawl::dir_crawl;
@@ -69,7 +51,7 @@ enum Message {
     MoveDown,
 }
 
-fn do_nothing(action: Url) -> Message {
+fn do_nothing(_action: Url) -> Message {
     Message::Nothing
 }
 
@@ -131,6 +113,7 @@ fn view(state: &State) -> Container<'_, Message> {
                 .max_width(500)
                 .spacing(20),
                 //buttons for updating path and running the find and replace operation
+                //  will be disabled if state.confirm == true
                 column![
                     button("Update path - find")
                         .on_press_maybe(if !state.confirm {
@@ -166,7 +149,7 @@ fn view(state: &State) -> Container<'_, Message> {
                 .spacing(20),
             ]
             .spacing(20),
-            // scrollable text output
+            // Container to display all the actions
             container(
                 scrollable(
                     markdown::view(
@@ -183,6 +166,7 @@ fn view(state: &State) -> Container<'_, Message> {
             .width(8000)
             .padding(20),
             // buttons for confirming or cancelling the operation
+            //      will be disabled if state.confirm == false
             row![
                 button("Replace")
                     .on_press_maybe(if state.confirm {

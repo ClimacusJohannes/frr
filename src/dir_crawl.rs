@@ -23,32 +23,6 @@ pub fn dir_crawl(org_path: &str) -> Result<Vec<String>, Error> {
                 .display()
                 .to_string();
             list.push(can_path);
-
-            //     *output_text = format!("{}\n\nFile: {}\n\n", output_text, display_path);
-            //     // display lines with the replaced slice in the buffer
-            //     for (i, line) in buffer.lines().enumerate() {
-            //         if line.contains(find) {
-            //             *output_text = format!("{}{}: {}\n", output_text, i + 1, line);
-            //             *output_text = format!(
-            //                 "{}=> {}\n\n",
-            //                 output_text,
-            //                 new_buffer.lines().nth(i).unwrap()
-            //             );
-            //         }
-            //     }
-
-            //     *output_text = format!(
-            //         "{}-------------------------------------------------------------------\n",
-            //         output_text
-            //     );
-
-            //     if confirm {
-            //         fs::write(&path.path(), new_buffer)?;
-            //     }
-            // } else {
-            //     // in case of a non-txt file skip
-            //     continue;
-            // }
         }
     }
     Ok(list)
