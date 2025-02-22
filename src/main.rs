@@ -423,7 +423,7 @@ fn main() -> iced::Result {
         .theme(|_| Theme::CatppuccinLatte)
         .window_size(Size {
             width: 1000.0,
-            height: 800.0,
+            height: 600.0,
         })
         .run()
 }
