@@ -179,7 +179,7 @@ fn view(state: &State) -> Container<'_, Message> {
                 .id(Id::new("scrollable"))
             )
             .style(|theme| { container::rounded_box(theme).set_border_radius(BORDER_RADIUS) })
-            .height(400)
+            .height(250)
             .width(8000)
             .padding(20),
             // buttons for confirming or cancelling the operation
@@ -422,8 +422,8 @@ fn main() -> iced::Result {
         .subscription(subscription)
         .theme(|_| Theme::CatppuccinLatte)
         .window_size(Size {
-            width: 1000.0,
-            height: 600.0,
+            width: 1200.0,
+            height: 700.0,
         })
         .run()
 }
