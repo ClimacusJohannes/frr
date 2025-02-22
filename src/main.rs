@@ -422,8 +422,8 @@ fn main() -> iced::Result {
         .subscription(subscription)
         .theme(|_| Theme::CatppuccinLatte)
         .window_size(Size {
-            width: 5000.0,
-            height: 1000.0,
+            width: 1000.0,
+            height: 800.0,
         })
         .run()
 }
