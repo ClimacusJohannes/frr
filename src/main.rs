@@ -13,7 +13,7 @@ mod has_border;
 use dir_crawl::dir_crawl;
 use has_border::HasBorder;
 
-#[derive(Default, Clone)]
+#[derive(Clone)]
 struct State {
     find: (String, String),
     replace: (String, String),
@@ -23,6 +23,21 @@ struct State {
     confirm: bool,
     file_list: Vec<String>,
     focus: String,
+}
+
+impl Default for State {
+    fn default() -> Self {
+        State {
+            find: ("".to_owned(), "".to_owned()),
+            replace: ("".to_owned(), "".to_owned()),
+            path: "".to_owned(),
+            text: "".to_owned(),
+            markdown: markdown::parse("").collect(),
+            confirm: false,
+            file_list: vec!["".to_owned()],
+            focus: "find".to_owned(),
+        }
+    }
 }
 
 impl State {
@@ -200,19 +215,40 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
     match message {
         // event handling for the find text input
         Message::FindChanged(find) => {
-            let mut trunc_find = find.clone();
-            let len = find.trim_end_matches(&['\r', '\n'][..]).len();
-            trunc_find.truncate(len);
-            state.find.0 = trunc_find;
+            state.find.0 = find.trim().to_owned();
             Task::none()
         }
 
         // event handling for the replace text input
         Message::ReplaceChanged(replace) => {
-            let mut trunc_replace = replace.clone();
-            let len = replace.trim_end_matches(&['\r', '\n'][..]).len();
-            trunc_replace.truncate(len);
-            state.replace.0 = trunc_replace;
+            state.replace.0 = replace.trim().to_owned();
+            Task::none()
+        }
+
+        // event handling for the directory text input
+        Message::ChangePath(dir) => {
+            state.path = dir.trim().to_owned();
+            state.update_markdown();
+            Task::none()
+        }
+
+        // event handling for the browse button
+        Message::BrowsePath => {
+            return Task::perform(AsyncFileDialog::new().pick_folder(), |path| {
+                Message::ChangePath(path.unwrap().path().display().to_string())
+            });
+        }
+
+        // update path based on updated find or replace strings
+        Message::UpdatePath(slice) => {
+            let cloned_path = state.path.clone();
+            if !cloned_path.contains(&slice.1) || slice.1 == "" {
+                state.text =
+                    format!("Could not update the path automatically, please update it manually.",);
+            }
+            state.update_markdown();
+            let new_path = cloned_path.replace(&slice.1, &slice.0);
+            state.path = new_path;
             Task::none()
         }
 
@@ -301,31 +337,6 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             state.confirm = false;
             state.text = format!("Operation cancelled.");
             state.update_markdown();
-            Task::none()
-        }
-
-        // event handling for the browse button
-        Message::BrowsePath => {
-            return Task::perform(AsyncFileDialog::new().pick_folder(), |path| {
-                Message::ChangePath(path.unwrap().path().display().to_string())
-            });
-        }
-        Message::ChangePath(dir) => {
-            state.path = dir;
-            state.update_markdown();
-            Task::none()
-        }
-
-        // update path based on updated find or replace strings
-        Message::UpdatePath(slice) => {
-            let cloned_path = state.path.clone();
-            if !cloned_path.contains(&slice.1) || slice.1 == "" {
-                state.text =
-                    format!("Could not update the path automatically, please update it manually.",);
-            }
-            state.update_markdown();
-            let new_path = cloned_path.replace(&slice.1, &slice.0);
-            state.path = new_path;
             Task::none()
         }
 
